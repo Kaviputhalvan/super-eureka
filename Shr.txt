@@ -1,0 +1,67 @@
+# peerid_chat_user_set.py
+import socket, threading, json, time
+
+PORT = 5000
+peer_id = input("Choose your Peer ID: ").strip().lower()
+
+routing = {}  # peer_id -> (ip, port, last_seen)
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(("", PORT))
+
+print("Your Peer ID:", peer_id)
+
+def send(pkt, addr):
+    sock.sendto(json.dumps(pkt).encode(), addr)
+
+def listener():
+    while True:
+        data, addr = sock.recvfrom(4096)
+        pkt = json.loads(data.decode())
+
+        if pkt["type"] == "ANNOUNCE":
+            routing[pkt["peer_id"]] = (addr[0], addr[1], time.time())
+
+        elif pkt["type"] == "LOOKUP":
+            target = pkt["peer_id"]
+            if target in routing:
+                send({
+                    "type": "FOUND",
+                    "peer_id": target,
+                    "addr": routing[target][:2]
+                }, addr)
+
+        elif pkt["type"] == "FOUND":
+            routing[pkt["peer_id"]] = (*pkt["addr"], time.time())
+
+        elif pkt["type"] == "MSG":
+            print(f"\n@{pkt['from']}: {pkt['text']}")
+
+threading.Thread(target=listener, daemon=True).start()
+
+# One-time seed (only to join network)
+seed = input("Seed peer IP (optional): ").strip()
+if seed:
+    send({"type": "ANNOUNCE", "peer_id": peer_id}, (seed, PORT))
+
+while True:
+    cmd = input("> ").strip()
+
+    if cmd.startswith("@"):
+        target, text = cmd[1:].split(" ", 1)
+        target = target.lower()
+
+        if target not in routing:
+            for _, (ip, port, _) in routing.items():
+                send({"type": "LOOKUP", "peer_id": target}, (ip, port))
+            time.sleep(1)
+
+        if target in routing:
+            ip, port, _ = routing[target]
+            send({
+                "type": "MSG",
+                "from": peer_id,
+                "text": text
+            }, (ip, port))
+        else:
+            print("Peer not found")
